@@ -47,9 +47,9 @@ def train(hyp, opt, device):
     #-------------------------create dataloader --------------------------------
     # 使图像边长变为最大stride的整数倍
     max_stride = int(max(model.stride))  # (max stride)
-    imgsz = math.ceil(opt.img_size / max_stride) * max_stride
+    imgsz = math.ceil(opt.img_size[0] / max_stride) * max_stride
 
-    dataset = SimpleDataset(root_path, imgsz, batch_size, augment=True, hyp=hyp, stride=gs)
+    dataset = SimpleDataset(root_path, imgsz, batch_size, augment=True, hyp=hyp, stride=max_stride)
     
     dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=8, sampler=None,
                             pin_memory=True, collate_fn=SimpleDataset.collate_fn)
@@ -109,7 +109,6 @@ def train(hyp, opt, device):
         optimizer.zero_grad()
 
         mloss = torch.zeros(4, device=device)  # mean losses for each epoch
-        # ------------------------- batch ------------------------------------
         for batch_id, (imgs, targets, paths, _) in enumerate(dataloader):
             num_iter = batch_id + batch_per_epoch * epoch  # 训练的总迭代次数
             
@@ -123,7 +122,7 @@ def train(hyp, opt, device):
                 for j, x in enumerate(optimizer.param_groups):
                     x['lr'] = np.interp(num_iter, xi, [0.1 if j == 2 else 0.0, x['initial_lr'] * lf(epoch)])
                     if 'momentum' in x:
-                        x['momentum'] = np.interp(ni, xi, [0.9, hyp['momentum']])
+                        x['momentum'] = np.interp(num_iter, xi, [0.9, hyp['momentum']])
 
             # Autocast
             with amp.autocast(enabled=True):
