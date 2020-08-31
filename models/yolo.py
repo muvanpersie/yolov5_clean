@@ -70,7 +70,7 @@ class Model(nn.Module):
             self.yaml = yaml.load(f, Loader=yaml.FullLoader)
 
         # Define model
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist, ch_out
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])
 
         # Build strides, anchors
         m = self.model[-1]  # Detect()
@@ -91,13 +91,13 @@ class Model(nn.Module):
             if m.f != -1:  # if not from previous layer
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
 
-            x = m(x)  # run
-            y.append(x if m.i in self.save else None)  # save output
+            x = m(x)
+            y.append(x if m.i in self.save else None)
 
         return x
 
-    def _initialize_biases(self, cf=None):  # initialize biases into Detect(), cf is class frequency
-        # cf = torch.bincount(torch.tensor(np.concatenate(dataset.labels, 0)[:, 0]).long(), minlength=nc) + 1.
+    # initialize biases into Detect(), cf is class frequency
+    def _initialize_biases(self, cf=None):
         m = self.model[-1]  # Detect() module
         for mi, s in zip(m.m, m.stride):  # from
             b = mi.bias.view(m.na, -1)  # conv.bias(255) to (3,85)
@@ -127,52 +127,65 @@ class Model(nn.Module):
         model_info(self)
 
 
-def parse_model(d, ch):  # model_dict, input_channels(3)
-    logger.info('\n%3s%18s%3s%10s  %-40s%-30s' % ('', 'from', 'n', 'params', 'module', 'arguments'))
+# model_dict, input_channels(3)
+def parse_model(d, ch):
+    '''
+    depth_multiple: 网络的层数对应的缩放系数
+    width_multiple: 某一层网络的output_channel对应的缩放系数
+    '''
 
-    anchors, nc, gd, gw = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
+    anchors, nc, scale_d, scale_w = d['anchors'], d['nc'], d['depth_multiple'], d['width_multiple']
 
     na = (len(anchors[0]) // 2) # 每一尺度anchor的个数
     no = na * (nc + 5)  # 输出通道数 = anchors * (classes + 1 + ４)
 
-    layers, save, c2 = [], [], ch[-1]  # layers, savelist, ch out
+    layers, save, channel_out = [], [], ch[-1]
+
     for i, (f, n, m, args) in enumerate(d['backbone'] + d['head']):  # from, number, module, args
-        m = eval(m) if isinstance(m, str) else m  # eval strings
+        m = eval(m) if isinstance(m, str) else m
         for j, a in enumerate(args):
             try:
-                args[j] = eval(a) if isinstance(a, str) else a  # eval strings
+                args[j] = eval(a) if isinstance(a, str) else a
             except:
                 pass
 
-        n = max(round(n * gd), 1) if n > 1 else n  # depth gain
+        n = max(round(n * scale_d), 1) if n > 1 else n  # depth gain
+        
         if m in [nn.Conv2d, Conv, Bottleneck, SPP, DWConv, MixConv2d, Focus, CrossConv, BottleneckCSP, C3]:
-            c1, c2 = ch[f], args[0]
+            channel_in, channel_out = ch[f], args[0]
 
-            c2 = make_divisible(c2 * gw, 8) if c2 != no else c2
+            channel_out = make_divisible(channel_out*scale_w, 8) if channel_out != no else channel_out
 
-            args = [c1, c2, *args[1:]]
+            args = [channel_in, channel_out, *args[1:]]
+
             if m in [BottleneckCSP, C3]:
                 args.insert(2, n)
                 n = 1
+
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
+
         elif m is Concat:
-            c2 = sum([ch[-1 if x == -1 else x + 1] for x in f])
+            channel_out = sum([ch[-1 if x == -1 else x + 1] for x in f])
+        
         elif m is Detect:
             args.append([ch[x + 1] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)
         else:
-            c2 = ch[f]
+            channel_out = ch[f]
 
         m_ = nn.Sequential(*[m(*args) for _ in range(n)]) if n > 1 else m(*args)  # module
         t = str(m)[8:-2].replace('__main__.', '')  # module type
+        
         np = sum([x.numel() for x in m_.parameters()])  # number params
+
         m_.i, m_.f, m_.type, m_.np = i, f, t, np  # attach index, 'from' index, type, number params
-        logger.info('%3s%18s%3s%10.0f  %-40s%-30s' % (i, f, n, np, t, args))  # print
         save.extend(x % i for x in ([f] if isinstance(f, int) else f) if x != -1)  # append to savelist
         layers.append(m_)
-        ch.append(c2)
+        
+        ch.append(channel_out)
+
     return nn.Sequential(*layers), sorted(save)
 
 
